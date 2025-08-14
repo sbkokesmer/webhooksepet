@@ -7,13 +7,23 @@ const app = express();
 app.use(bodyParser.json());
 
 // Webhook endpoint
-app.post('/getir', (req, res) => {
-    console.log('📩 Getir verisi geldi:', req.body);
-    res.status(200).send('OK'); // Gönderen sisteme cevap
+app.post('/getir/add', (req, res) => {
+    console.log('📩 Getir ADD verisi geldi:', req.body);
+    res.status(200).send('OK');
 });
 
-app.post('/yemeksepeti', (req, res) => {
-    console.log('📩 Yemeksepeti verisi geldi:', req.body);
+app.post('/getir/cancel', (req, res) => {
+    console.log('📩 Getir CANCEL verisi geldi:', req.body);
+    res.status(200).send('OK');
+});
+
+app.post('/yemeksepeti/add', (req, res) => {
+    console.log('📩 Yemeksepeti ADD verisi geldi:', req.body);
+    res.status(200).send('OK');
+});
+
+app.post('/yemeksepeti/update', (req, res) => {
+    console.log('📩 Yemeksepeti UPDATE verisi geldi:', req.body);
     res.status(200).send('OK');
 });
 
