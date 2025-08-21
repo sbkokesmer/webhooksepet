@@ -11,7 +11,7 @@ app.use(bodyParser.json());
 
 const uri = process.env.MONGODB_URI;
 if (!uri) {
-  console.error("❌ Missing MONGODB_URI in environment variables");
+  console.error("❌ Missing MONGODB_URI in environment variableas");
   process.exit(1);
 }
 mongoose.connect(uri, {
