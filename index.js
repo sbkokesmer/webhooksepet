@@ -21,8 +21,18 @@ const io = new Server(server, {
 });
 
 // REST için CORS (preflight dahil)
-app.use(cors({ origin: "*", methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"] }));
-app.options("*", cors());
+app.use(cors({
+  origin: "*",
+  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type", "token"],
+  exposedHeaders: []
+}));
+app.options("*", cors({
+  origin: "*",
+  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type", "token"],
+  exposedHeaders: []
+}));
 
 // JSON gövde parse
 app.use(bodyParser.json()); // alternatif: app.use(express.json());
@@ -60,15 +70,23 @@ app.post('/api/getir/orders/:id/verify', async (req, res) => {
     const { id } = req.params;
     const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/verify`;
 
+    // Token'ı öncelikle istemcinin header'ından al, yoksa env'den kullan
+    const token = req.headers['token'];
+    if (!token) {
+      return res.status(400).json({ error: 'token header is required' });
+    }
+
+
+
+    // Upstream header'ları
+    const headers = {
+      'Content-Type': 'application/json',
+      'token': token
+    };
+
     const upstream = await fetch(url, {
-      method: 'POST', // gerekirse GET/PATCH/PUT ise değiştir
-      headers: {
-        'Content-Type': 'application/json',
-        // Gerekli kimlik doğrulama/sig header’larını .env’den ekleyin:
-        // 'X-Api-Key': process.env.GETIR_API_KEY,
-        // 'Authorization': `Bearer ${process.env.GETIR_TOKEN}`,
-        // 'X-Signature': hesapladığın_imza,
-      },
+      method: 'POST',
+      headers,
       body: JSON.stringify(req.body || {})
     });
 
