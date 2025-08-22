@@ -76,8 +76,6 @@ app.post('/api/getir/orders/:id/verify', async (req, res) => {
       return res.status(400).json({ error: 'token header is required' });
     }
 
-
-
     // Upstream header'ları
     const headers = {
       'Content-Type': 'application/json',
@@ -97,6 +95,39 @@ app.post('/api/getir/orders/:id/verify', async (req, res) => {
     return res.status(upstream.status).json(json);
   } catch (err) {
     console.error('Getir verify proxy error:', err);
+    return res.status(502).json({ error: 'Upstream call failed' });
+  }
+});
+
+// ===================== Getir Prepare Order Proxy =====================
+app.post('/api/getir/orders/:id/prepare', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/prepare`;
+
+    const token = req.headers['token'];
+    if (!token) {
+      return res.status(400).json({ error: 'token header is required' });
+    }
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'token': token
+    };
+
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(req.body || {})
+    });
+
+    const text = await upstream.text();
+    let json;
+    try { json = JSON.parse(text); } catch { json = { raw: text }; }
+
+    return res.status(upstream.status).json(json);
+  } catch (err) {
+    console.error('Getir prepare proxy error:', err);
     return res.status(502).json({ error: 'Upstream call failed' });
   }
 });
