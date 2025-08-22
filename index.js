@@ -165,6 +165,68 @@ app.post('/api/getir/orders/:id/deliver', async (req, res) => {
   }
 });
 
+// ===================== Getir Login Proxy + Socket Publish =====================
+// Test ortamı için sabit keyler
+const GETIR_LOGIN_URL = 'https://food-external-api-gateway.development.getirapi.com/auth/login';
+const APP_SECRET_KEY = '4940b25d95c518c8a5c6be188408addb922972f0';
+const RESTAURANT_SECRET_KEY = 'ce690a2598f17f2b715ef447c5d8355439e9ee72';
+
+let LAST_GETIR_TOKEN = null;
+let LAST_GETIR_RESTAURANT_ID = null;
+let LAST_GETIR_EXPIRES_AT = null;
+
+app.post('/api/getir/login', async (req, res) => {
+  try {
+    const body = {
+      appSecretKey: APP_SECRET_KEY,
+      restaurantSecretKey: RESTAURANT_SECRET_KEY,
+    };
+
+    const upstream = await fetch(GETIR_LOGIN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const text = await upstream.text();
+    let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+
+    if (!upstream.ok) {
+      return res.status(upstream.status).json(json);
+    }
+
+    const { restaurantId, token, expiresAt } = json;
+
+    LAST_GETIR_TOKEN = token || null;
+    LAST_GETIR_RESTAURANT_ID = restaurantId || null;
+    LAST_GETIR_EXPIRES_AT = expiresAt || null;
+
+    io.emit('getirToken', {
+      restaurantId: restaurantId || null,
+      token: token || null,
+      expiresAt: expiresAt || null,
+      ts: new Date().toISOString(),
+    });
+
+    return res.status(200).json({
+      restaurantId: restaurantId || null,
+      token: token || null,
+      expiresAt: expiresAt || null,
+    });
+  } catch (err) {
+    console.error('Getir login proxy error:', err);
+    return res.status(502).json({ error: 'Upstream call failed' });
+  }
+});
+
+app.get('/api/getir/token', (req, res) => {
+  return res.status(200).json({
+    restaurantId: LAST_GETIR_RESTAURANT_ID,
+    token: LAST_GETIR_TOKEN,
+    expiresAt: LAST_GETIR_EXPIRES_AT,
+  });
+});
+
 // ===================== Test GET =====================
 app.get('/', (req, res) => {
   res.send('Webhook çalışıyor!');
