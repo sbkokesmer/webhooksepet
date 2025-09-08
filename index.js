@@ -62,6 +62,11 @@ app.post('/yemeksepeti/update', (req, res) => {
   res.status(200).send('OK');
 });
 
+// Helper function to safely parse JSON responses
+function tryJson(text) {
+  try { return JSON.parse(text); } catch { return { raw: text }; }
+}
+
 // ===================== Getir API Proxy =====================
 // Frontend doğrudan Getir'e değil, buraya vuracak.
 // Örn: POST /api/getir/orders/:id/verify  -> sunucu tarafı Getir'e çağrı yapar.
@@ -161,6 +166,51 @@ app.post('/api/getir/orders/:id/deliver', async (req, res) => {
     return res.status(upstream.status).json(json);
   } catch (err) {
     console.error('Getir deliver proxy error:', err);
+    return res.status(502).json({ error: 'Upstream call failed' });
+  }
+});
+
+// ===================== Getir Restaurant Status (Close/Open) =====================
+// Close restaurant for a limited time (15 | 30 | 45 minutes)
+app.put('/api/getir/restaurant/close', async (req, res) => {
+  try {
+    const token = req.headers['token'];
+    if (!token) return res.status(400).json({ error: 'token header is required' });
+
+    const { timeOffAmount } = req.body; // expected: 15 | 30 | 45
+    if (![15, 30, 45].includes(Number(timeOffAmount))) {
+      return res.status(400).json({ error: 'timeOffAmount must be 15, 30 or 45' });
+    }
+
+    const upstream = await fetch('https://developers.getir.com/restaurants/status/close', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', token },
+      body: JSON.stringify({ timeOffAmount: Number(timeOffAmount) })
+    });
+
+    const text = await upstream.text();
+    return res.status(upstream.status).json(tryJson(text));
+  } catch (err) {
+    console.error('Getir restaurant close error:', err);
+    return res.status(502).json({ error: 'Upstream call failed' });
+  }
+});
+
+// Open restaurant immediately
+app.put('/api/getir/restaurant/open', async (req, res) => {
+  try {
+    const token = req.headers['token'];
+    if (!token) return res.status(400).json({ error: 'token header is required' });
+
+    const upstream = await fetch('https://developers.getir.com/restaurants/status/open', {
+      method: 'PUT',
+      headers: { token }
+    });
+
+    const text = await upstream.text();
+    return res.status(upstream.status).json(tryJson(text));
+  } catch (err) {
+    console.error('Getir restaurant open error:', err);
     return res.status(502).json({ error: 'Upstream call failed' });
   }
 });
