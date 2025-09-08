@@ -182,7 +182,7 @@ app.put('/api/getir/restaurant/close', async (req, res) => {
       return res.status(400).json({ error: 'timeOffAmount must be 15, 30 or 45' });
     }
 
-    const upstream = await fetch('https://developers.getir.com/restaurants/status/close', {
+    const upstream = await fetch('https://food-external-api-gateway.development.getirapi.com/restaurants/status/close', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', token },
       body: JSON.stringify({ timeOffAmount: Number(timeOffAmount) })
@@ -202,7 +202,7 @@ app.put('/api/getir/restaurant/open', async (req, res) => {
     const token = req.headers['token'];
     if (!token) return res.status(400).json({ error: 'token header is required' });
 
-    const upstream = await fetch('https://developers.getir.com/restaurants/status/open', {
+    const upstream = await fetch('https://food-external-api-gateway.development.getirapi.com/restaurants/status/open', {
       method: 'PUT',
       headers: { token }
     });
