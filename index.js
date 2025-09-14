@@ -166,7 +166,7 @@ app.post('/api/getir/orders/:id/deliver', async (req, res) => {
 });
 
 // ===================== Getir Auth Login Proxy =====================
-app.post('/api/getir/auth/login', async (req, res) => {
+app.post('/api/getir/login', async (req, res) => {
   try {
     const url = 'https://food-external-api-gateway.development.getirapi.com/auth/login';
     const headers = {
