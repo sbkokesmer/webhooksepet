@@ -62,11 +62,6 @@ app.post('/yemeksepeti/update', (req, res) => {
   res.status(200).send('OK');
 });
 
-// Helper function to safely parse JSON responses
-function tryJson(text) {
-  try { return JSON.parse(text); } catch { return { raw: text }; }
-}
-
 // ===================== Getir API Proxy =====================
 // Frontend doğrudan Getir'e değil, buraya vuracak.
 // Örn: POST /api/getir/orders/:id/verify  -> sunucu tarafı Getir'e çağrı yapar.
@@ -170,111 +165,86 @@ app.post('/api/getir/orders/:id/deliver', async (req, res) => {
   }
 });
 
-// ===================== Getir Restaurant Status (Close/Open) =====================
-// Close restaurant for a limited time (15 | 30 | 45 minutes)
-app.put('/api/getir/restaurant/close', async (req, res) => {
-  try {
-    const token = req.headers['token'];
-    if (!token) return res.status(400).json({ error: 'token header is required' });
 
-    const { timeOffAmount } = req.body; // expected: 15 | 30 | 45
-    if (![15, 30, 45].includes(Number(timeOffAmount))) {
-      return res.status(400).json({ error: 'timeOffAmount must be 15, 30 or 45' });
+// ===================== Getir Restaurant Status Proxy =====================
+// RESTAURANT CLOSE ENDPOINT
+app.put('/api/getir/restaurants/status/close', async (req, res) => {
+  try {
+    const url = 'https://food-external-api-gateway.development.getirapi.com/restaurants/status/close';
+    const token = req.headers['token'];
+    if (!token) {
+      return res.status(400).json({ error: 'token header is required' });
     }
-
-    const upstream = await fetch('https://food-external-api-gateway.development.getirapi.com/restaurants/status/close', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', token },
-      body: JSON.stringify({ timeOffAmount: Number(timeOffAmount) })
-    });
-
-    const text = await upstream.text();
-    return res.status(upstream.status).json(tryJson(text));
-  } catch (err) {
-    console.error('Getir restaurant close error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-// Open restaurant immediately
-app.put('/api/getir/restaurant/open', async (req, res) => {
-  try {
-    const token = req.headers['token'];
-    if (!token) return res.status(400).json({ error: 'token header is required' });
-
-    const upstream = await fetch('https://food-external-api-gateway.development.getirapi.com/restaurants/status/open', {
-      method: 'PUT',
-      headers: { token }
-    });
-
-    const text = await upstream.text();
-    return res.status(upstream.status).json(tryJson(text));
-  } catch (err) {
-    console.error('Getir restaurant open error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-// ===================== Getir Login Proxy + Socket Publish =====================
-// Test ortamı için sabit keyler
-const GETIR_LOGIN_URL = 'https://food-external-api-gateway.development.getirapi.com/auth/login';
-const APP_SECRET_KEY = '4940b25d95c518c8a5c6be188408addb922972f0';
-const RESTAURANT_SECRET_KEY = 'ce690a2598f17f2b715ef447c5d8355439e9ee72';
-
-let LAST_GETIR_TOKEN = null;
-let LAST_GETIR_RESTAURANT_ID = null;
-let LAST_GETIR_EXPIRES_AT = null;
-
-app.post('/api/getir/login', async (req, res) => {
-  try {
-    const body = {
-      appSecretKey: APP_SECRET_KEY,
-      restaurantSecretKey: RESTAURANT_SECRET_KEY,
+    const headers = {
+      'Content-Type': 'application/json',
+      'token': token
     };
-
-    const upstream = await fetch(GETIR_LOGIN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+    const upstream = await fetch(url, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(req.body || {})
     });
-
     const text = await upstream.text();
-    let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    if (!upstream.ok) {
-      return res.status(upstream.status).json(json);
-    }
-
-    const { restaurantId, token, expiresAt } = json;
-
-    LAST_GETIR_TOKEN = token || null;
-    LAST_GETIR_RESTAURANT_ID = restaurantId || null;
-    LAST_GETIR_EXPIRES_AT = expiresAt || null;
-
-    io.emit('getirToken', {
-      restaurantId: restaurantId || null,
-      token: token || null,
-      expiresAt: expiresAt || null,
-      ts: new Date().toISOString(),
-    });
-
-    return res.status(200).json({
-      restaurantId: restaurantId || null,
-      token: token || null,
-      expiresAt: expiresAt || null,
-    });
+    let json;
+    try { json = JSON.parse(text); } catch { json = { raw: text }; }
+    return res.status(upstream.status).json(json);
   } catch (err) {
-    console.error('Getir login proxy error:', err);
+    console.error('Getir restaurant close proxy error:', err);
     return res.status(502).json({ error: 'Upstream call failed' });
   }
 });
 
-app.get('/api/getir/token', (req, res) => {
-  return res.status(200).json({
-    restaurantId: LAST_GETIR_RESTAURANT_ID,
-    token: LAST_GETIR_TOKEN,
-    expiresAt: LAST_GETIR_EXPIRES_AT,
-  });
+// RESTAURANT OPEN ENDPOINT
+app.put('/api/getir/restaurants/status/open', async (req, res) => {
+  try {
+    const url = 'https://food-external-api-gateway.development.getirapi.com/restaurants/status/open';
+    const token = req.headers['token'];
+    if (!token) {
+      return res.status(400).json({ error: 'token header is required' });
+    }
+    const headers = {
+      'Content-Type': 'application/json',
+      'token': token
+    };
+    const upstream = await fetch(url, {
+      method: 'PUT',
+      headers,
+      // open için body boş olabilir, göndermiyoruz
+    });
+    const text = await upstream.text();
+    let json;
+    try { json = JSON.parse(text); } catch { json = { raw: text }; }
+    return res.status(upstream.status).json(json);
+  } catch (err) {
+    console.error('Getir restaurant open proxy error:', err);
+    return res.status(502).json({ error: 'Upstream call failed' });
+  }
+});
+
+// ===================== Getir Restaurant Menu Proxy =====================
+app.get('/api/getir/restaurants/menu', async (req, res) => {
+  try {
+    const url = 'https://food-external-api-gateway.development.getirapi.com/restaurants/menu';
+    const token = req.headers['token'];
+    if (!token) {
+      return res.status(400).json({ error: 'token header is required' });
+    }
+    const headers = {
+      'Content-Type': 'application/json',
+      'token': token
+    };
+    const upstream = await fetch(url, {
+      method: 'GET',
+      headers
+    });
+    const text = await upstream.text();
+    let json;
+    try { json = JSON.parse(text); } catch { json = { raw: text }; }
+    return res.status(upstream.status).json(json);
+  } catch (err) {
+    console.error('Getir restaurant menu proxy error:', err);
+    return res.status(502).json({ error: 'Upstream call failed' });
+  }
 });
 
 // ===================== Test GET =====================
