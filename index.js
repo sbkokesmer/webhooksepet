@@ -165,6 +165,27 @@ app.post('/api/getir/orders/:id/deliver', async (req, res) => {
   }
 });
 
+// ===================== Getir Auth Login Proxy =====================
+app.post('/api/getir/auth/login', async (req, res) => {
+  try {
+    const url = 'https://food-external-api-gateway.development.getirapi.com/auth/login';
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(req.body || {})
+    });
+    const text = await upstream.text();
+    let json;
+    try { json = JSON.parse(text); } catch { json = { raw: text }; }
+    return res.status(upstream.status).json(json);
+  } catch (err) {
+    console.error('Getir auth login proxy error:', err);
+    return res.status(502).json({ error: 'Upstream call failed' });
+  }
+});
 
 // ===================== Getir Restaurant Status Proxy =====================
 // RESTAURANT CLOSE ENDPOINT
