@@ -165,6 +165,39 @@ app.post('/api/getir/orders/:id/deliver', async (req, res) => {
   }
 });
 
+// ===================== Getir Verify Scheduled Proxy =====================
+app.post('/api/getir/orders/:id/verifyScheduled', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/verify-scheduled`;
+
+    const token = req.headers['token'];
+    if (!token) {
+      return res.status(400).json({ error: 'token header is required' });
+    }
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'token': token
+    };
+
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(req.body || {})
+    });
+
+    const text = await upstream.text();
+    let json;
+    try { json = JSON.parse(text); } catch { json = { raw: text }; }
+
+    return res.status(upstream.status).json(json);
+  } catch (err) {
+    console.error('Getir verifyScheduled proxy error:', err);
+    return res.status(502).json({ error: 'Upstream call failed' });
+  }
+});
+
 // ===================== Getir Auth Login Proxy =====================
 app.post('/api/getir/login', async (req, res) => {
   try {
