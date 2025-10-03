@@ -44,12 +44,6 @@ app.post('/getir/add', (req, res) => {
   res.status(200).send('OK');
 });
 
-app.post('/getir/cancel', (req, res) => {
-  console.log('📩 Getir CANCEL verisi geldi:', req.body);
-  io.emit('newOrder', req.body);
-  res.status(200).send('OK');
-});
-
 app.post('/yemeksepeti/add', (req, res) => {
   console.log('📩 Yemeksepeti ADD verisi geldi:', req.body);
   io.emit('newOrder', req.body);
@@ -73,7 +67,7 @@ app.post('/api/getir/orders/:id/verify', async (req, res) => {
     // Token'ı öncelikle istemcinin header'ından al, yoksa env'den kullan
     const token = req.headers['token'];
     if (!token) {
-      return res.status(400).json({ error: 'token header is required' });
+      return res.status(400).json({ error: 'token headerc is required' });
     }
 
     // Upstream header'ları
@@ -194,6 +188,39 @@ app.post('/api/getir/orders/:id/verifyScheduled', async (req, res) => {
     return res.status(upstream.status).json(json);
   } catch (err) {
     console.error('Getir verifyScheduled proxy error:', err);
+    return res.status(502).json({ error: 'Upstream call failed' });
+  }
+});
+
+// ===================== Getir Cancel Order Proxy =====================
+app.post('/api/getir/orders/:id/cancel', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/cancel`;
+
+    const token = req.headers['token'];
+    if (!token) {
+      return res.status(400).json({ error: 'token header is required' });
+    }
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'token': token
+    };
+
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(req.body || {})
+    });
+
+    const text = await upstream.text();
+    let json;
+    try { json = JSON.parse(text); } catch { json = { raw: text }; }
+
+    return res.status(upstream.status).json(json);
+  } catch (err) {
+    console.error('Getir cancel proxy error:', err);
     return res.status(502).json({ error: 'Upstream call failed' });
   }
 });
