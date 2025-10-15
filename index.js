@@ -50,9 +50,23 @@ app.post('/yemeksepeti/add', (req, res) => {
   res.status(200).send('OK');
 });
 
+
 app.post('/yemeksepeti/update', (req, res) => {
   console.log('📩 Yemeksepeti UPDATE verisi geldi:', req.body);
   io.emit('newOrder', req.body);
+  res.status(200).send('OK');
+});
+
+// Yeni route: /yemeksepeti/add/order/:id
+app.post('/yemeksepeti/add/order/:id', (req, res) => {
+  console.log('🆕 /yemeksepeti/add/order/:id çağrıldı');
+  console.log('orderId:', req.params.id);
+  console.log('body:', req.body);
+  io.emit('newOrder', {
+    platform: 'yemeksepeti',
+    orderId: req.params.id,
+    data: req.body
+  });
   res.status(200).send('OK');
 });
 
