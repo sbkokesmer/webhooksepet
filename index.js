@@ -380,7 +380,7 @@ app.get('/api/getir/token', async (req, res) => {
 
     const body = {
       appSecretKey: '4940b25d95c518c8a5c6be188408addb922972f0',
-      restaurantSecretKey: 'ce696a2598f17f2b715ef447c5d8355439e9ee72'
+      restaurantSecretKey: 'ce690a2598f17f2b715ef447c5d8355439e9ee72'
     };
 
     const upstream = await fetch(url, {
