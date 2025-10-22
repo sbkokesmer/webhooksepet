@@ -370,6 +370,43 @@ app.get('/api/getir/restaurants/menu', async (req, res) => {
   }
 });
 
+// ===================== Getir Token Proxy =====================
+app.get('/api/getir/token', async (req, res) => {
+  try {
+    const url = 'https://food-external-api-gateway.development.getirapi.com/auth/login';
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+
+    const body = {
+      appSecretKey: '4940b25d95c518c8a5c6be188408addb922972f0',
+      restaurantSecretKey: 'ce696a2598f17f2b715ef447c5d8355439e9ee72'
+    };
+
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body)
+    });
+
+    if (!upstream.ok) {
+      const errText = await upstream.text();
+      console.error('❌ Getir token hatası:', errText);
+      return res.status(upstream.status).json({ error: 'Getir token request failed', details: errText });
+    }
+
+    const data = await upstream.json();
+    return res.status(200).json({
+      restaurantId: data.restaurantId || '6848ec6b03df6e37f62278d0',
+      token: data.token
+    });
+
+  } catch (err) {
+    console.error('❌ Getir token proxy error:', err);
+    return res.status(502).json({ error: 'Token retrieval failed' });
+  }
+});
+
 // ===================== Test GET =====================
 app.get('/', (req, res) => {
   res.send('Webhook çalışıyor!');
