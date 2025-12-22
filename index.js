@@ -90,57 +90,182 @@ app.use(async (req, res, next) => {
 });
 
 // ===================== YEMEKSEPETI =====================
-// Yemeksepeti siparişini Supabase'e kaydet (tüm alanları yeni kolonlara map'ler)
+
+// ===================== YEMEKSEPETI LOGIN =====================
+// Yemeksepeti token alma (axios'suz, fetch ile)
+app.post('/yemeksepeti/login', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'username ve password zorunlu' });
+    }
+
+    const formBody = new URLSearchParams({
+      username,
+      password,
+      grant_type: 'client_credentials'
+    });
+
+    const upstream = await fetch(
+      'https://integration-middleware-tr.me.restaurant-partners.com/v2/login',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: formBody.toString()
+      }
+    );
+
+    const text = await upstream.text();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = { raw: text };
+    }
+
+    return res.status(upstream.status).json(json);
+  } catch (err) {
+    console.error('❌ YEMEKSEPETI LOGIN ERROR:', err);
+    return res.status(500).json({ error: 'Yemeksepeti login failed' });
+  }
+});
+
+// ===================== YEMEKSEPETI ACCEPT =====================
+// Proxy endpoint: POST /order/accept  -> upstream: https://integration-middleware-tr.me.restaurant-partners.com/v2/order/accept
+// - Raw JSON body forward edilir
+// - Bearer token: Öncelik Authorization header (Bearer ...). Yoksa body.token / body.access_token / body.bearerToken alanlarından alınır.
+app.post('/order/accept', async (req, res) => {
+  try {
+    const upstreamUrl = 'https://integration-middleware-tr.me.restaurant-partners.com/v2/order/accept';
+
+    // Bearer token kaynağı: header > body
+    const authHeader = req.headers['authorization'];
+    const bodyToken =
+      (req.body && (req.body.token || req.body.access_token || req.body.bearerToken)) || null;
+
+    let authorization = null;
+    if (authHeader && typeof authHeader === 'string' && authHeader.trim().length > 0) {
+      // Kullanıcı zaten Bearer gönderdiyse aynen ilet
+      authorization = authHeader;
+    } else if (bodyToken && typeof bodyToken === 'string' && bodyToken.trim().length > 0) {
+      // Body'den token geldiyse Bearer olarak sar
+      authorization = bodyToken.toLowerCase().startsWith('bearer ')
+        ? bodyToken
+        : `Bearer ${bodyToken}`;
+    }
+
+    if (!authorization) {
+      return res.status(400).json({
+        error: 'Authorization gerekli. Header: Authorization: Bearer <token> veya body içinde token/access_token/bearerToken gönder.'
+      });
+    }
+
+    const upstream = await fetch(upstreamUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authorization
+      },
+      body: JSON.stringify(req.body || {})
+    });
+
+    const text = await upstream.text();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = { raw: text };
+    }
+
+    return res.status(upstream.status).json(json);
+  } catch (err) {
+    console.error('❌ /order/accept ERROR:', err);
+    return res.status(502).json({ error: 'Upstream call failed' });
+  }
+});
+// Yemeksepeti siparişini Supabase'e kaydet (mevcut kolonlara map'ler)
+// Not: Bazı akışlarda veri wrapper ile gelir: { platform, orderId, data: {...} }
 async function saveYemeksepetiOrderToDB(body) {
   try {
+    // Wrapper normalize
+    const isWrapped = body && typeof body === 'object' && body.data && typeof body.data === 'object';
+    const src = isWrapped ? body.data : body;
+    const wrapperOrderId = isWrapped ? body.orderId : null;
+
+    // order_id önceliği: wrapper.orderId > src.orderId > src.id > src.code > src.foodOrder.id
     const orderId =
-      body?.orderId ||
-      body?.id ||
-      body?.code ||
-      body?.foodOrder?.id ||
+      wrapperOrderId ||
+      src?.orderId ||
+      src?.id ||
+      src?.code ||
+      src?.foodOrder?.id ||
       null;
+
+    // Adres (tek string) - tabloda delivery_address kolonu var
+    const a = src?.delivery?.address || {};
+    const deliveryAddress = [
+      a.street,
+      a.number,
+      a.building,
+      a.floor,
+      a.entrance,
+      a.flatNumber,
+      a.district,
+      a.deliveryMainArea,
+      a.postcode,
+      a.city
+    ]
+      .filter((x) => x !== undefined && x !== null && String(x).trim() !== '')
+      .map(String)
+      .join(' | ');
 
     const payload = {
       order_id: orderId,
       platform: 'YEMEKSEPETI',
 
       // meta
-      token: body?.token || null,
-      code: body?.code || null,
-      pre_order: body?.preOrder ?? null,
-      expiry_date: body?.expiryDate || null,
-      created_at_platform: body?.createdAt || null,
-      platform_restaurant_id: body?.platformRestaurant?.id || null,
+      token: src?.token || null,
+      code: src?.code || null,
+      pre_order: src?.preOrder ?? null,
+      expiry_date: src?.expiryDate || null,
+      created_at_platform: src?.createdAt || null,
+      platform_restaurant_id: src?.platformRestaurant?.id || null,
 
       // customer
-      customer_id: body?.customer?.id || null,
-      customer_first_name: body?.customer?.firstName || null,
-      customer_last_name: body?.customer?.lastName || null,
+      customer_id: src?.customer?.id || null,
+      customer_first_name: src?.customer?.firstName || null,
+      customer_last_name: src?.customer?.lastName || null,
       customer_name:
-        body?.customer?.firstName || body?.customer?.lastName
-          ? `${body?.customer?.firstName || ''} ${body?.customer?.lastName || ''}`.trim()
+        src?.customer?.firstName || src?.customer?.lastName
+          ? `${src?.customer?.firstName || ''} ${src?.customer?.lastName || ''}`.trim()
           : null,
-      customer_phone: body?.customer?.mobilePhone || null,
+      customer_phone: src?.customer?.mobilePhone || null,
 
       // payment
-      payment_type: body?.payment?.type || null,
-      payment_status: body?.payment?.status || null,
+      payment_type: src?.payment?.type || null,
+      payment_status: src?.payment?.status || null,
+
+      // price / currency
+      subtotal: src?.price?.subTotal ? Number(src.price.subTotal) : null,
+      vat_total: src?.price?.vatTotal ? Number(src.price.vatTotal) : null,
+      total_price: src?.price?.grandTotal ? Number(src.price.grandTotal) : null,
+      currency: src?.localInfo?.currencySymbol || null,
 
       // delivery
-      delivery_type: body?.expeditionType || null,
-      delivery_expected_time: body?.delivery?.expectedDeliveryTime || null,
-      delivery_city: body?.delivery?.address?.city || null,
-      delivery_postcode: body?.delivery?.address?.postcode || null,
-      delivery_street: body?.delivery?.address?.street || null,
-
-      // price
-      subtotal: body?.price?.subTotal ? Number(body.price.subTotal) : null,
-      vat_total: body?.price?.vatTotal ? Number(body.price.vatTotal) : null,
-      total_price: body?.price?.grandTotal ? Number(body.price.grandTotal) : null,
+      delivery_type: src?.expeditionType || null,
+      delivery_expected_time: src?.delivery?.expectedDeliveryTime || null,
+      delivery_city: a.city || null,
+      delivery_postcode: a.postcode || null,
+      delivery_street: a.street || null,
+      delivery_address: deliveryAddress || null,
+      city: a.city || null,
 
       // json
-      products: body?.products || null,
-      comments: body?.comments || null,
+      products: src?.products || null,
+      comments: src?.comments || null,
 
       // raw
       raw_payload: body
@@ -179,7 +304,8 @@ app.post('/yemeksepeti/add/order/:id', (req, res) => {
   console.log('🆕 /yemeksepeti/add/order/:id çağrıldı');
   console.log('orderId:', req.params.id);
   console.log('body:', req.body);
-  saveYemeksepetiOrderToDB(req.body);
+  // orderId parametresini body'ye ekleyip kaydet (bazı payload'larda orderId gelmiyor)
+  saveYemeksepetiOrderToDB({ platform: 'yemeksepeti', orderId: req.params.id, data: req.body });
   emitNewOrder({
     platform: 'yemeksepeti',
     orderId: req.params.id,
@@ -188,641 +314,16 @@ app.post('/yemeksepeti/add/order/:id', (req, res) => {
   res.status(200).send('OK');
 });
 
-// ===================== GETIR =====================
-// Getir Token Manager
-let GETIR_TOKEN_CACHE = null;
-let GETIR_TOKEN_EXPIRY = null;
-
-const fetchGetirToken = async () => {
-  try {
-    const url = 'https://food-external-api-gateway.development.getirapi.com/auth/login';
-    const headers = {
-      'Content-Type': 'application/json'
-    };
-    const body = {
-      appSecretKey: '4940b25d95c518c8a5c6be188408addb922972f0',
-      restaurantSecretKey: 'ce690a2598f17f2b715ef447c5d8355439e9ee72'
-    };
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body)
-    });
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('❌ Getir token fetch failed:', errText);
-      return null;
-    }
-    const data = await response.json();
-    GETIR_TOKEN_CACHE = data.token;
-    // Set expiry 55 minutes from now
-    GETIR_TOKEN_EXPIRY = Date.now() + 55 * 60 * 1000;
-    console.log('✅ Getir token fetched/refreshed successfully');
-    return GETIR_TOKEN_CACHE;
-  } catch (err) {
-    console.error('❌ Getir token fetch error:', err);
-    return null;
-  }
-};
-
-const ensureGetirToken = async () => {
-  if (!GETIR_TOKEN_CACHE || Date.now() >= GETIR_TOKEN_EXPIRY) {
-    await fetchGetirToken();
-  }
-};
-
-// Initial fetch
-ensureGetirToken();
-// Refresh token every 55 minutes
-setInterval(fetchGetirToken, 55 * 60 * 1000);
-
-// Webhook endpointleri
+// ===================== GETIR WEBHOOK =====================
 app.post('/getir/add', (req, res) => {
   console.log('📩 Getir ADD verisi geldi:', req.body);
-  // Log simplified order summary
-  const order = req.body;
-  const orderId = order.orderId || order.id || 'unknown';
-  const totalPrice = order.totalPrice || order.total_price || 'unknown';
-  const discountedPrice = order.discountedPrice || order.discounted_price;
-  let summary = `Order Summary - orderId: ${orderId}, totalPrice: ${totalPrice}`;
-  if (discountedPrice !== undefined) {
-    summary += `, discountedPrice: ${discountedPrice}`;
-  }
-  console.log(summary);
 
-  emitNewOrder(req.body);   // frontend 'newOrder' eventini dinliyor
+  emitNewOrder({
+    platform: 'getir',
+    data: req.body
+  });
+
   res.status(200).send('OK');
-});
-
-// ===================== GETIR INTERNAL ROUTES =====================
-// Backend managed internal routes
-app.post('/api/internal/getir/verify/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Token garanti altına al
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/verify`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('✅ GETIR VERIFY RESULT:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR VERIFY ERROR:', err);
-    return res.status(502).json({ error: 'Verify failed' });
-  }
-});
-
-app.post('/api/internal/getir/verify-scheduled/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/verify-scheduled`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('🗓️ GETIR VERIFY SCHEDULED RESULT:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR VERIFY SCHEDULED ERROR:', err);
-    return res.status(502).json({ error: 'Verify scheduled failed' });
-  }
-});
-
-app.post('/api/internal/getir/prepare/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/prepare`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('🍳 GETIR PREPARE RESULT:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR PREPARE ERROR:', err);
-    return res.status(502).json({ error: 'Prepare failed' });
-  }
-});
-
-app.post('/api/internal/getir/deliver/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/deliver`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('🚚 GETIR DELIVER RESULT:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR DELIVER ERROR:', err);
-    return res.status(502).json({ error: 'Deliver failed' });
-  }
-});
-
-app.get('/api/internal/getir/cancel-options/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/cancel-options`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, { method: 'GET', headers });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('🛑 GETIR CANCEL OPTIONS:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR CANCEL OPTIONS ERROR:', err);
-    return res.status(502).json({ error: 'Cancel options failed' });
-  }
-});
-
-app.post('/api/internal/getir/cancel/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { cancelReasonId, cancelNote, productId } = req.body || {};
-
-    if (!cancelReasonId) {
-      return res.status(400).json({ error: 'cancelReasonId is required' });
-    }
-
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/cancel`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const body = {
-      cancelReasonId,
-      cancelNote: cancelNote || ''
-    };
-
-    if (productId) body.productId = productId;
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body)
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('🛑 GETIR CANCEL RESULT:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR CANCEL ERROR:', err);
-    return res.status(502).json({ error: 'Cancel failed' });
-  }
-});
-
-app.get('/api/internal/getir/active', async (req, res) => {
-  try {
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = 'https://food-external-api-gateway.development.getirapi.com/food-orders/active';
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('📦 GETIR ACTIVE ORDERS (BACKEND):', json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR ACTIVE ERROR:', err);
-    return res.status(502).json({ error: 'Active orders failed' });
-  }
-});
-
-
-app.post('/api/getir/orders/:id/prepare', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/prepare`;
-
-    const token = req.headers['token'];
-    if (!token) {
-      return res.status(400).json({ error: 'token header is required' });
-    }
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': token
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(req.body || {})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('Getir prepare proxy error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-app.post('/api/getir/orders/:id/deliver', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/deliver`;
-
-    const token = req.headers['token'];
-    if (!token) {
-      return res.status(400).json({ error: 'token header is required' });
-    }
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': token
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(req.body || {})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('Getir deliver proxy error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-app.post('/api/getir/orders/:id/verifyScheduled', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/verify-scheduled`;
-
-    const token = req.headers['token'];
-    if (!token) {
-      return res.status(400).json({ error: 'token header is required' });
-    }
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': token
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(req.body || {})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('Getir verifyScheduled proxy error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-app.post('/api/getir/orders/:id/cancel', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/cancel`;
-
-    const token = req.headers['token'];
-    if (!token) {
-      return res.status(400).json({ error: 'token header is required' });
-    }
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': token
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(req.body || {})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('Getir cancel proxy error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-app.get('/api/getir/orders/:id/cancel-options', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/cancel-options`;
-
-    const token = req.headers['token'];
-    if (!token) {
-      return res.status(400).json({ error: 'token header is required' });
-    }
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': token
-    };
-
-    const upstream = await fetch(url, { method: 'GET', headers });
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('Getir cancel-options proxy error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-app.post('/api/getir/login', async (req, res) => {
-  try {
-    const url = 'https://food-external-api-gateway.development.getirapi.com/auth/login';
-    const headers = {
-      'Content-Type': 'application/json'
-    };
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(req.body || {})
-    });
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('Getir auth login proxy error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-app.put('/api/getir/restaurants/status/close', async (req, res) => {
-  try {
-    const url = 'https://food-external-api-gateway.development.getirapi.com/restaurants/status/close';
-    const token = req.headers['token'];
-    if (!token) {
-      return res.status(400).json({ error: 'token header is required' });
-    }
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': token
-    };
-    const upstream = await fetch(url, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify(req.body || {})
-    });
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('Getir restaurant close proxy error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-app.put('/api/getir/restaurants/status/open', async (req, res) => {
-  try {
-    const url = 'https://food-external-api-gateway.development.getirapi.com/restaurants/status/open';
-    const token = req.headers['token'];
-    if (!token) {
-      return res.status(400).json({ error: 'token header is required' });
-    }
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': token
-    };
-    const upstream = await fetch(url, {
-      method: 'PUT',
-      headers,
-      // open için body boş olabilir, göndermiyoruz
-    });
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('Getir restaurant open proxy error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-app.get('/api/getir/restaurants/menu', async (req, res) => {
-  try {
-    const url = 'https://food-external-api-gateway.development.getirapi.com/restaurants/menu';
-    const token = req.headers['token'];
-    if (!token) {
-      return res.status(400).json({ error: 'token header is required' });
-    }
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': token
-    };
-    const upstream = await fetch(url, {
-      method: 'GET',
-      headers
-    });
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('Getir restaurant menu proxy error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-app.get('/api/getir/token', async (req, res) => {
-  try {
-    const url = 'https://food-external-api-gateway.development.getirapi.com/auth/login';
-    const headers = {
-      'Content-Type': 'application/json'
-    };
-
-    const body = {
-      appSecretKey: '4940b25d95c518c8a5c6be188408addb922972f0',
-      restaurantSecretKey: 'ce690a2598f17f2b715ef447c5d8355439e9ee72'
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body)
-    });
-
-    if (!upstream.ok) {
-      const errText = await upstream.text();
-      console.error('❌ Getir token hatası:', errText);
-      return res.status(upstream.status).json({ error: 'Getir token request failed', details: errText });
-    }
-
-    const data = await upstream.json();
-    return res.status(200).json({
-      restaurantId: data.restaurantId || '6848ec6b03df6e37f62278d0',
-      token: data.token
-    });
-
-  } catch (err) {
-    console.error('❌ Getir token proxy error:', err);
-    return res.status(502).json({ error: 'Token retrieval failed' });
-  }
-});
-
-app.post('/api/getir/orders/active', async (req, res) => {
-  try {
-    const url = 'https://food-external-api-gateway.development.getirapi.com/food-orders/active';
-
-    const token = req.headers['token'];
-    if (!token) {
-      return res.status(400).json({ error: 'token header is required' });
-    }
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': token
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('Getir active orders proxy error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
 });
 
 // ===================== MIGROS =====================
@@ -863,313 +364,6 @@ app.post('/migros/kurye', (req, res) => {
   res.status(200).send('OK');
 });
 
-// ===================== Getir API Proxy =====================
-// Frontend doğrudan Getir'e değil, buraya vuracak.
-// Örn: POST /api/getir/orders/:id/verify  -> sunucu tarafı Getir'e çağrı yapar.
-app.post('/api/getir/orders/:id/verify', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/verify`;
-
-    // Token'ı öncelikle istemcinin header'ından al, yoksa env'den kullan
-    const token = req.headers['token'];
-    if (!token) {
-      return res.status(400).json({ error: 'token headerc is required' });
-    }
-
-    // Upstream header'ları
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': token
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(req.body || {})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('Getir verify proxy error:', err);
-    return res.status(502).json({ error: 'Upstream call failed' });
-  }
-});
-
-// ===================== Getir VERIFY (BACKEND MANAGED) =====================
-// Frontend sadece orderId yollar, token ve çağrı tamamen backend'de çözülür
-app.post('/api/internal/getir/verify/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Token garanti altına al
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/verify`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('✅ GETIR VERIFY RESULT:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR VERIFY ERROR:', err);
-    return res.status(502).json({ error: 'Verify failed' });
-  }
-});
-
-// ===================== Getir VERIFY SCHEDULED (BACKEND MANAGED) =====================
-// İleri tarihli siparişlerin ilk onayı için kullanılır
-app.post('/api/internal/getir/verify-scheduled/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/verify-scheduled`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('🗓️ GETIR VERIFY SCHEDULED RESULT:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR VERIFY SCHEDULED ERROR:', err);
-    return res.status(502).json({ error: 'Verify scheduled failed' });
-  }
-});
-
-// ===================== Getir PREPARE (BACKEND MANAGED) =====================
-// Backend-managed prepare endpoint (mirrors verify)
-app.post('/api/internal/getir/prepare/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/prepare`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('🍳 GETIR PREPARE RESULT:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR PREPARE ERROR:', err);
-    return res.status(502).json({ error: 'Prepare failed' });
-  }
-});
-
-// ===================== Getir DELIVER (BACKEND MANAGED) =====================
-// Backend-managed deliver endpoint (mirrors verify)
-app.post('/api/internal/getir/deliver/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/deliver`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({})
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('🚚 GETIR DELIVER RESULT:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR DELIVER ERROR:', err);
-    return res.status(502).json({ error: 'Deliver failed' });
-  }
-});
-
-
-
-
-
-
-// ===================== Getir CANCEL OPTIONS (BACKEND MANAGED) =====================
-app.get('/api/internal/getir/cancel-options/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/cancel-options`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, { method: 'GET', headers });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('🛑 GETIR CANCEL OPTIONS:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR CANCEL OPTIONS ERROR:', err);
-    return res.status(502).json({ error: 'Cancel options failed' });
-  }
-});
-
-// ===================== Getir CANCEL (BACKEND MANAGED) =====================
-// Frontend sadece orderId + reason yollar, token backend'de çözülür
-app.post('/api/internal/getir/cancel/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { cancelReasonId, cancelNote, productId } = req.body || {};
-
-    if (!cancelReasonId) {
-      return res.status(400).json({ error: 'cancelReasonId is required' });
-    }
-
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = `https://food-external-api-gateway.development.getirapi.com/food-orders/${id}/cancel`;
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const body = {
-      cancelReasonId,
-      cancelNote: cancelNote || ''
-    };
-
-    if (productId) body.productId = productId;
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body)
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('🛑 GETIR CANCEL RESULT:', id, json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR CANCEL ERROR:', err);
-    return res.status(502).json({ error: 'Cancel failed' });
-  }
-});
-
-
-
-
-
-
-// ===================== Getir Active Food Orders (BACKEND MANAGED) =====================
-app.get('/api/internal/getir/active', async (req, res) => {
-  try {
-    await ensureGetirToken();
-    if (!GETIR_TOKEN_CACHE) {
-      return res.status(500).json({ error: 'Getir token yok' });
-    }
-
-    const url = 'https://food-external-api-gateway.development.getirapi.com/food-orders/active';
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'token': GETIR_TOKEN_CACHE
-    };
-
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers
-    });
-
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-    console.log('📦 GETIR ACTIVE ORDERS (BACKEND):', json);
-
-    return res.status(upstream.status).json(json);
-  } catch (err) {
-    console.error('❌ INTERNAL GETIR ACTIVE ERROR:', err);
-    return res.status(502).json({ error: 'Active orders failed' });
-  }
-});
 
 // ===================== Test GET =====================
 app.get('/', (req, res) => {
