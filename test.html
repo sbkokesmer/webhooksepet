@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <title>Webhook Test Paneli</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+  <h1>📦 Gelen Siparişler</h1>
+  <ul id="orders"></ul>
+
+  <script>
+    // Heroku URL'in
+    const socket = io("https://webhookposkobi-03c384c3643f.herokuapp.com");
+
+    socket.on("connect", () => {
+      console.log("✅ Socket.IO bağlantısı kuruldu");
+    });
+
+    socket.on("newOrder", (order) => {
+      console.log("📩 Yeni sipariş:", order);
+      const li = document.createElement("li");
+      li.textContent = JSON.stringify(order);
+      document.getElementById("orders").appendChild(li);
+    });
+  </script>
+</body>
+</html>
