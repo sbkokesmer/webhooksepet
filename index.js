@@ -233,6 +233,19 @@ async function saveYemeksepetiOrderToDB(body) {
       expiry_date: src?.expiryDate || null,
       created_at_platform: src?.createdAt || null,
       platform_restaurant_id: src?.platformRestaurant?.id || null,
+      current_status: 'NEW',
+      status_history: [
+        {
+          status: 'NEW',
+          at: new Date().toISOString()
+        }
+      ],
+      callback_order_accepted_url: src?.callbackUrls?.orderAcceptedUrl || null,
+      callback_order_rejected_url: src?.callbackUrls?.orderRejectedUrl || null,
+      callback_order_prepared_url: src?.callbackUrls?.orderPreparedUrl || null,
+      callback_order_picked_up_url: src?.callbackUrls?.orderPickedUpUrl || null,
+      callback_order_product_modification_url:
+        src?.callbackUrls?.orderProductModificationUrl || null,
 
       // customer
       customer_id: src?.customer?.id || null,
